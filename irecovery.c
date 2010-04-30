@@ -31,7 +31,7 @@
 #define DFU_MODE        0x1222
 #define BUF_SIZE        0x10000
 
-void irecv_hexdump(unsigned char* buf, unsigned int len) {
+/*void irecv_hexdump(unsigned char* buf, unsigned int len) {
 	unsigned int i = 0;
 	for(i = 0; i < len; i++) {
 		if(i % 16 == 0 && i != 0)
@@ -39,7 +39,7 @@ void irecv_hexdump(unsigned char* buf, unsigned int len) {
 		printf("%02x ", buf[i]);
 	}
 	printf("\n");
-}
+}*/
 
 struct usb_dev_handle* irecv_init(unsigned int devid) {
 	struct usb_dev_handle *handle = NULL;
@@ -64,17 +64,22 @@ struct usb_dev_handle* irecv_init(unsigned int devid) {
 }
 
 void irecv_close(struct usb_dev_handle* handle) {
-	printf("Closing USB connection...\n");
 	if (handle != NULL) {
+    printf("Closing USB connection...\n");
 		usb_close(handle);
 	}
 }
 
 void irecv_reset(struct usb_dev_handle* handle) {
 	if (handle != NULL) {
+    printf("Resetting USB connection...\n");
 		usb_reset(handle);
 	}
 }
+
+/* --------------------------------------------------------------- */
+/* 29/04/2010 harmn1 - added progress indications for file uploads */
+/* --------------------------------------------------------------- */
 
 int irecv_upload(struct usb_dev_handle* handle, char* filename) {
 	if(handle == NULL) {
@@ -84,12 +89,12 @@ int irecv_upload(struct usb_dev_handle* handle, char* filename) {
 	
 	FILE* file = fopen(filename, "rb");
 	if(file == NULL) {
-		printf("irecv_upload: Unable to find file!\n");
+		printf("irecv_upload: Unable to find file! (%s)\n",filename);
 		return 1;
 	}
 
 	fseek(file, 0, SEEK_END);
-	long len = ftell(file);
+	unsigned int len = ftell(file);
 	fseek(file, 0, SEEK_SET);
 
 	char* buffer = malloc(len);
@@ -113,41 +118,55 @@ int irecv_upload(struct usb_dev_handle* handle, char* filename) {
 	}
 
 	int i = 0;
+  unsigned int sizesent=0;
 	char response[6];
 	for(i = 0; i < packets; i++) {
 		int size = i + 1 < packets ? 0x800 : last;
 
+    sizesent+=size;
+    printf("Sending packet %d of %d (0x%08x of 0x%08x bytes) .. ",i+1,packets,sizesent,len);
+    
 		if(!usb_control_msg(handle, 0x21, 1, i, 0, &buffer[i * 0x800], size, 1000)) {
-			printf("irecv_upload: Error sending packet!\n");
+			printf("XX\nirecv_upload: Error sending packet!\n");
 			return -1;
 		}
 
 		if(usb_control_msg(handle, 0xA1, 3, 0, 0, response, 6, 1000) != 6) {
-			printf("irecv_upload: Error receiving status!\n");
+			printf("XX\nirecv_upload: Error receiving status!\n");
 			return -1;
 
 		} else {
 			if(response[4] != 5) {
-				printf("irecv_upload: Invalid status error!\n");
+				printf("XX\nirecv_upload: Invalid status error!\n");
 				return -1;
-			}
+			} else {
+        
+        printf("OK\r");
+        
+      }
+          
 		}
 
 	}
+
+  printf("\nExecuting .. ");
 
 	usb_control_msg(handle, 0x21, 1, i, 0, buffer, 0, 1000);
 	for(i = 6; i <= 8; i++) {
 		if(usb_control_msg(handle, 0xA1, 3, 0, 0, response, 6, 1000) != 6) {
-			printf("irecv_upload: Error receiving execution status!\n");
+			printf("XX\nirecv_upload: Error receiving execution status!\n");
 			return -1;
 
 		} else {
 			if(response[4] != i) {
-				printf("irecv_upload: Invalid execution status!\n");
+				printf("XX\nirecv_upload: Invalid execution status!\n");
 				return -1;
 			}
 		}
+       
 	}
+
+  printf(" OK!\n");
 
 	free(buffer);
 	return 0;
@@ -258,6 +277,10 @@ int irecv_exploit(struct usb_dev_handle* handle, char* payload) {
     return 0;
 }
 
+/* ------------------------------------------------------------------------------------------- */
+/* 29/04/2010 harmn1 - added '/reset' command to allow USB reset to be initiated from a script */
+/* ------------------------------------------------------------------------------------------- */
+
 int irecv_parse(struct usb_dev_handle* handle, char* command) {
     unsigned int status = 0;
 	char* action = strtok(strdup(command), " ");
@@ -265,12 +288,16 @@ int irecv_parse(struct usb_dev_handle* handle, char* command) {
 	    printf("Commands:\n");
 	    printf("\t/exit\t\t\texit from recovery console.\n");
 	    printf("\t/upload <file>\t\tupload file to device.\n");
-	    printf("\t/exploit [payload]\tsend usb exploit packet.\n");
+      printf("\t/exploit [payload]\tsend usb exploit packet.\n");
+      printf("\t/reset\t\t\tsend usb reset.\n");
 	    
 	} else if(!strcmp(action, "exit")) {
-	    free(action);
-	    return -1;
-	    
+    free(action);
+    return -1;
+    
+	} else if(!strcmp(action, "reset")) {
+    irecv_reset(handle);
+    
 	} else if(strcmp(action, "upload") == 0) {
 		char* filename = strtok(NULL, " ");
 		if(filename != NULL) {
@@ -289,6 +316,11 @@ int irecv_parse(struct usb_dev_handle* handle, char* command) {
 	free(action);
 	return 0;
 }
+
+/* ------------------------------------------------------------------------------------------------------- */
+/* 29/04/2010 harmn1 - changed bulk_read() logic to allow console mode to function correctly on 3.x iBoots */
+/*                     made console input commands echo to log file                                        */
+/* ------------------------------------------------------------------------------------------------------- */
 
 int irecv_console(struct usb_dev_handle *handle, char* logfile) {
 	if(usb_set_configuration(handle, 1) < 0) {
@@ -322,38 +354,48 @@ int irecv_console(struct usb_dev_handle *handle, char* logfile) {
 	    }
 	}
 
+  printf("iRecovery operating in interactive console mode\n");
+  if (logfile) printf("Output being logged to '%s'\n\n",logfile);
+  else printf("\n");
+  
 	while(1) {
-		int bytes = 0;
-		while(bytes >= 0) {
-			memset(buffer, 0, BUF_SIZE);
-			bytes = usb_bulk_read(handle, 0x81, buffer, BUF_SIZE, 500);
-			int i;
-			for(i = 0; i < bytes; ++i)
-			{
-				fprintf(stdout, "%c", buffer[i]);
-				if(fd) fprintf(fd, "%c", buffer[i]);
-			}
-		}
-
-		char* command = readline("iRecovery> ");
-		if(command && *command) {
-			add_history(command);
-		}
-
-        if(command[0] == '/') {
-            if(irecv_parse(handle, &command[1]) < 0) {
-                free(command);
-                break;
-            }
+	
+    int bytes = 0;
+  
+    memset(buffer, 0, BUF_SIZE);
+    bytes = usb_bulk_read(handle, 0x81, buffer, BUF_SIZE, 500);
+    
+    if (bytes>0) {
+      int i;
             
-        } else {
-            if(irecv_command(handle, 1, &command) < 0) {
-                free(command);
-                break;
-            }
-        }
+      for(i = 0; i < bytes; ++i) {
+        fprintf(stdout, "%c", buffer[i]);
+        if(fd) fprintf(fd, "%c", buffer[i]);
+      }
+    }
+      
+    char* command = readline("iRecovery> ");
+    
+    if(command && *command) {
+      add_history(command);
+      if(fd) fprintf(fd, ">%s\n", command);
 
-		free(command);
+      if (command[0] == '/') {
+        if (irecv_parse(handle, &command[1]) < 0) {
+          free(command);
+          break;
+        }
+      }
+      else
+      {
+        if (irecv_command(handle, 1, &command) < 0) {
+          free(command);
+          break;
+        }
+      }
+
+      free(command);
+    }
 	}
 	
 	free(buffer);
@@ -361,6 +403,11 @@ int irecv_console(struct usb_dev_handle *handle, char* logfile) {
 	usb_release_interface(handle, 1);
 }
 
+/* -------------------------------------------------------------------------------------------------------------------- */
+/* 29/04/2010 harmn1 - extended list handling to allow iRecovery commands (e.g. /upload) to be automated within scripts */
+/*                     added support for comment lines (beginning //) within scripts                                    */
+/* -------------------------------------------------------------------------------------------------------------------- */
+ 
 int irecv_list(struct usb_dev_handle* handle, char* filename) {
 
 	if (handle == NULL) {
@@ -381,10 +428,37 @@ int irecv_list(struct usb_dev_handle* handle, char* filename) {
 
 	//irecv_command(handle, temp_len, &line);
 	while (fgets(line, 0x200, script) != NULL) {
-		printf("irecv_list: sending> %s\n", line);
-		char *command[1];
-		command[0] = line;
-		irecv_command(handle, 1, command); 
+  
+    if(!((line[0]=='/') && (line[1]=='/'))) {
+      
+      if(line[0] == '/') {
+      
+        printf("irecv_list: handling> %s", line);
+        char byte;
+        int offset=strlen(line)-1;
+        
+        while(offset>0) {
+        
+          if (line[offset]==0x0D || line[offset]==0x0A) line[offset--]=0x00;  
+          else break;
+              
+        };
+
+        irecv_parse(handle, &line[1]);
+      
+      }
+      
+      else {
+
+        printf("irecv_list: sending> %s", line);
+        char *command[1];
+        command[0] = line;
+        irecv_command(handle, 1, command); 
+
+      }
+    
+    }
+    
 	}
 
 	fclose(script);
@@ -455,4 +529,3 @@ int main(int argc, char *argv[]) {
 	irecv_close(handle);
 	return 0;
 }
-
