@@ -15,3 +15,12 @@ It currently connects to 0x1281 (iPhone, iPhone 3G, iPod touch, iPod touch 2G: R
 	./iRecovery -c "command"	send a single command.
 	./iRecovery -l <file>		sends a set of commands from a file (one per line).
 	
+Changes made 29/04/2010 by harmn1:
+
+  * fixed console mode to work correctly on 3.x iBoots (e.g. 3.1.2 3GS)
+  * updated -l script parser to allow iRecovery commands to be automated (i.e. send /upload command in a script)
+  * added support for comment lines in scripts (starting //)
+  * added '/reset' command to allow USB reset from within a script
+  * added file upload progress indicator
+  * made commands which are typed into the console echo into log file
+
